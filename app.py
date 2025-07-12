@@ -1,101 +1,54 @@
-import validators
 import streamlit as st
-from langchain.prompts import PromptTemplate
 from langchain_groq import ChatGroq
-from langchain.chains.summarize import load_summarize_chain
-from langchain_community.document_loaders import UnstructuredURLLoader
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-import re
-from langchain.schema import Document
+from langchain_community.utilities import ArxivAPIWrapper,WikipediaAPIWrapper
+from langchain_community.tools import ArxivQueryRun,WikipediaQueryRun,DuckDuckGoSearchRun
+from langchain.agents import initialize_agent,AgentType
+from langchain.callbacks import StreamlitCallbackHandler
+import os
+from dotenv import load_dotenv
+## Code
+####
 
-# Streamlit setup
-st.set_page_config(page_title="Langchain: Summarize Text From YT or Website", page_icon="🦜")
-st.title("🦜 Langchain: Summarize Text from YT or Website")
-st.subheader("Provide a YouTube or Website URL")
+## Arxiv and wikipedia Tools
+arxiv_wrapper=ArxivAPIWrapper(top_k_results=1, doc_content_chars_max=200)
+arxiv=ArxivQueryRun(api_wrapper=arxiv_wrapper)
+
+api_wrapper=WikipediaAPIWrapper(top_k_results=1,doc_content_chars_max=200)
+wiki=WikipediaQueryRun(api_wrapper=api_wrapper)
+
+search=DuckDuckGoSearchRun(name="Search")
+
+
+st.title("🔎 LangChain - Chat with search")
+"""
+In this example, we're using `StreamlitCallbackHandler` to display the thoughts and actions of an agent in an interactive Streamlit app.
+Try more LangChain 🤝 Streamlit Agent examples at [github.com/langchain-ai/streamlit-agent](https://github.com/langchain-ai/streamlit-agent).
+"""
+
+## Sidebar for settings
+st.sidebar.title("Settings")
+api_key=st.sidebar.text_input("Enter your Groq API Key:",type="password")
 st.secrets["HF_TOKEN"]
 
-# Sidebar for Groq API
-with st.sidebar:
-    groq_api_key = st.text_input("🔑 Groq API Key", type="password")
+if "messages" not in st.session_state:
+    st.session_state["messages"]=[
+        {"role":"assisstant","content":"Hi,I'm a chatbot who can search the web. How can I help you?"}
+    ]
 
-# Input URL
-generic_url = st.text_input("Paste a YouTube or Website URL")
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg['content'])
 
-# Prompt template
-prompt_template = """
-Provide a concise and informative summary of the following content in under 300 words:
+if prompt:=st.chat_input(placeholder="What is machine learning?"):
+    st.session_state.messages.append({"role":"user","content":prompt})
+    st.chat_message("user").write(prompt)
 
-Content:
-{text}
-"""
-prompt = PromptTemplate(template=prompt_template, input_variables=["text"])
+    llm=ChatGroq(groq_api_key=api_key,model_name="Llama3-8b-8192",streaming=True)
+    tools=[search,arxiv,wiki]
 
-# Load LLM
-if groq_api_key:
-    llm = ChatGroq(model="gemma2-9b-it", groq_api_key=groq_api_key)
-else:
-    st.warning("Please enter your Groq API key to proceed.")
-    st.stop()
+    search_agent=initialize_agent(tools,llm,agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,handling_parsing_errors=True)
 
-
-def get_youtube_transcript(video_url):
-    """Extract transcript from YouTube video"""
-    video_id_match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", video_url)
-    if not video_id_match:
-        return None
-    video_id = video_id_match.group(1)
-    transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    full_text = " ".join([entry["text"] for entry in transcript])
-    return full_text
-
-
-# Button click
-if st.button("Summarize the content from YT or Website"):
-
-    if not generic_url.strip():
-        st.error("❌ Please enter a valid URL.")
-    elif not validators.url(generic_url):
-        st.error("❌ URL is not valid.")
-    else:
-        try:
-            with st.spinner("⏳ Processing..."):
-
-                if "youtube.com" in generic_url or "youtu.be" in generic_url:
-                    try:
-                        transcript_text = get_youtube_transcript(generic_url)
-                        if not transcript_text:
-                            st.error("❌ Could not extract transcript.")
-                            st.stop()
-                        docs = [Document(page_content=transcript_text)]
-                    except (TranscriptsDisabled, NoTranscriptFound):
-                        st.error("❌ No transcript available for this YouTube video.")
-                        st.stop()
-                else:
-                    # Website URL loader
-                    loader = UnstructuredURLLoader(
-                        urls=[generic_url],
-                        ssl_verify=False,
-                        headers={
-                            "User-Agent": (
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/115.0.0.0 Safari/537.36"
-                            )
-                        }
-                    )
-                    docs = loader.load()
-
-                if not docs:
-                    st.warning("⚠️ No content loaded. Try another URL.")
-                    st.stop()
-
-                # Summarize
-                chain = load_summarize_chain(llm, chain_type="stuff", prompt=prompt)
-                summary = chain.run(docs)
-
-                st.success("✅ Summary Generated")
-                st.write(summary)
-
-        except Exception as e:
-            st.error("❌ Exception occurred while summarizing the content.")
-            st.exception(e)
+    with st.chat_message("assistant"):
+        st_cb=StreamlitCallbackHandler(st.container(),expand_new_thoughts=False)
+        response=search_agent.run(st.session_state.messages,callbacks=[st_cb])
+        st.session_state.messages.append({'role':'assistant',"content":response})
+        st.write(response)
