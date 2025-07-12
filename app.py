@@ -12,6 +12,7 @@ from langchain.schema import Document
 st.set_page_config(page_title="Langchain: Summarize Text From YT or Website", page_icon="🦜")
 st.title("🦜 Langchain: Summarize Text from YT or Website")
 st.subheader("Provide a YouTube or Website URL")
+st.secrets["HF_TOKEN"]
 
 # Sidebar for Groq API
 with st.sidebar:
