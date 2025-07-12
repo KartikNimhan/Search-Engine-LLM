@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# ---- Tools Setup ----
+# ---- Tool Setup ----
 arxiv_wrapper = ArxivAPIWrapper(top_k_results=1, doc_content_chars_max=200)
 arxiv = ArxivQueryRun(api_wrapper=arxiv_wrapper)
 
@@ -19,20 +19,24 @@ wiki = WikipediaQueryRun(api_wrapper=wiki_wrapper)
 
 search = DuckDuckGoSearchRun(name="Search")
 
-# ---- Streamlit App ----
+# ---- Streamlit App UI ----
 st.set_page_config(page_title="LangChain Web Search Chatbot")
 st.title("🔎 LangChain - Chat with Search")
 
-"""
-Ask anything! This chatbot can search the web using DuckDuckGo, Wikipedia, and Arxiv via LangChain tools.
-"""
+st.markdown(
+    "Ask anything! This chatbot can search the web using **DuckDuckGo**, **Wikipedia**, and **Arxiv** via LangChain tools."
+)
 
 # ---- Sidebar ----
 st.sidebar.title("🔐 Settings")
 api_key = st.sidebar.text_input("Enter your Groq API Key:", type="password")
-st.secrets["HF_TOKEN"]
 
-# ---- Chat History ----
+# Ensure API key is provided
+if not api_key:
+    st.warning("Please enter your Groq API key in the sidebar to continue.")
+    st.stop()
+
+# ---- Chat History Setup ----
 if "messages" not in st.session_state:
     st.session_state["messages"] = [
         {"role": "assistant", "content": "Hi, I'm a chatbot who can search the web. How can I help you?"}
@@ -41,15 +45,15 @@ if "messages" not in st.session_state:
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# ---- Chat Input ----
+# ---- Handle User Input ----
 if prompt := st.chat_input(placeholder="Ask me anything..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state["messages"].append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
-    # Convert message history to a single prompt string
-    full_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in st.session_state.messages])
+    # Create chat prompt history
+    full_prompt = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state["messages"]])
 
-    # LangChain LLM and Agent Setup
+    # Setup LangChain agent
     llm = ChatGroq(groq_api_key=api_key, model_name="Llama3-8b-8192", streaming=True)
     tools = [search, arxiv, wiki]
 
@@ -57,15 +61,20 @@ if prompt := st.chat_input(placeholder="Ask me anything..."):
         tools,
         llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-        handle_parsing_errors=True
+        handle_parsing_errors=True,
+        verbose=True,
     )
 
     with st.chat_message("assistant"):
         st_cb = StreamlitCallbackHandler(st.container(), expand_new_thoughts=False)
         try:
-            response = search_agent.run(full_prompt, callbacks=[st_cb])
+            # Smart routing: direct arXiv ID queries to arxiv tool
+            if "arxiv:" in prompt.lower():
+                response = arxiv.run(prompt)
+            else:
+                response = search_agent.run(full_prompt, callbacks=[st_cb])
         except Exception as e:
-            response = f"❌ Error: {e}"
+            response = f"❌ Error: {str(e)}"
 
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state["messages"].append({"role": "assistant", "content": response})
         st.write(response)
